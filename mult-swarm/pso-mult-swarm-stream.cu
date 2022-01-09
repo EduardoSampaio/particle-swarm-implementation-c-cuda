@@ -39,7 +39,7 @@ typedef struct Swarm
 const double MaxValue = 1.7976931348623157E+308;
 const int num_dimensions = 2;
 const int num_particle = 4096;
-const int num_swarms = 4;
+const int num_swarms = 16;
 const int THREAD_PER_BLOCK = 256;
 const int BLOCKS = num_particle / THREAD_PER_BLOCK;
 const int MAX_ITER = 30;
@@ -291,15 +291,14 @@ int main()
             calculate_fitness<<<BLOCKS, THREAD_PER_BLOCK, 0, stream[i]>>>(h_swarms[i].swarm);
             evaluate_update_pbest<<<BLOCKS, THREAD_PER_BLOCK, 0, stream[i]>>>(h_swarms[i].swarm);
             update_gbest<<<BLOCKS, THREAD_PER_BLOCK, 0, stream[i]>>>(h_swarms[i].swarm, h_swarms[i].pos_best_s, h_swarms[i].err_best_s);
-            cudaDeviceSynchronize();
             update_position_velocity<<<BLOCKS, THREAD_PER_BLOCK, 0, stream[i]>>>(h_swarms[i].swarm, BOUNDS, h_swarms[i].pos_best_s, numbersRand);
             k++;
         }
+        cudaDeviceSynchronize();
         HANDLE_ERROR(cudaMemcpyAsync(h_pos_best_s, h_swarms[i].pos_best_s, sizeof(double) * num_dimensions, cudaMemcpyDeviceToHost));
         HANDLE_ERROR(cudaMemcpyAsync(&h_err_best_s, h_swarms[i].err_best_s, sizeof(double), cudaMemcpyDeviceToHost));
 
-        cudaDeviceSynchronize();
-        // printf("Solution Swarm:%d [x:%.20f, y:% .20f] error: % .20f\n", i, h_pos_best_s[0], h_pos_best_s[1], h_err_best_s);
+        printf("Solution Swarm:%d [x:%.20f, y:% .20f] error: % .20f\n", i, h_pos_best_s[0], h_pos_best_s[1], h_err_best_s);
 
         if (h_pos_best_s[0] < h_pos_best_g[0] && h_pos_best_s[1] < h_pos_best_g[1])
         {
@@ -308,8 +307,8 @@ int main()
             h_err_best_g = h_err_best_s;
         }
     }
-    update_AllParticle_position_velocity<<<BLOCKS, THREAD_PER_BLOCK>>>(h_swarms, BOUNDS, pos_best_g, numbersRand, num_swarms, num_particle, num_dimensions);
     cudaDeviceSynchronize();
+    update_AllParticle_position_velocity<<<BLOCKS, THREAD_PER_BLOCK>>>(h_swarms, BOUNDS, pos_best_g, numbersRand, num_swarms, num_particle, num_dimensions);
     cudaEventRecord(stop, 0);
     cudaEventSynchronize(stop);
 
@@ -321,8 +320,7 @@ int main()
     {
         HANDLE_ERROR(cudaStreamDestroy(stream[i]));
     }
-
-    cudaFree(swarms);
+ 
     cudaError_t err = cudaGetLastError();
     HANDLE_ERROR(err);
     return 0;
