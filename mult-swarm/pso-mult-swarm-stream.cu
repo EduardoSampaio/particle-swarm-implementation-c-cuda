@@ -135,16 +135,13 @@ __global__ void init_particle(Swarm *swarms, double *x0, double *numbers, int nu
 
 void initialize_gpu_memory()
 {
-    // h_pos_best_g = (double*)malloc(sizeof(double) * num_dimensions);
-    cudaMallocHost(&h_pos_best_g, sizeof(double) * num_dimensions, cudaHostAllocMapped);
+    h_pos_best_g = (double*)malloc(sizeof(double) * num_dimensions);
     h_pos_best_g[0] = MaxValue;
     h_pos_best_g[1] = MaxValue;
     h_err_best_g = MaxValue;
 
-    // h_swarm = (Particle*)malloc(sizeof(Particle) * num_particle);
-    // h_swarms = (Swarm*)malloc(sizeof(Swarm) * num_swarms);
-    cudaMallocHost(&h_swarm, sizeof(Particle) * num_particle, cudaHostAllocMapped);
-    cudaMallocHost(&h_swarms, sizeof(Swarm) * num_swarms, cudaHostAllocMapped);
+    h_swarm = (Particle*)malloc(sizeof(Particle) * num_particle);
+    h_swarms = (Swarm*)malloc(sizeof(Swarm) * num_swarms);
     cudaMalloc(&pos_best_g, sizeof(double) * num_dimensions);
     cudaMalloc(&err_best_g, sizeof(double));
     cudaMalloc(&swarm, sizeof(Particle) * num_particle);
