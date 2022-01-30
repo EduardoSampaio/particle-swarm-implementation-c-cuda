@@ -43,7 +43,7 @@ const int num_dimensions = 2;
 const int num_particle = 4096;
 const int THREAD_PER_BLOCK = 128;
 const int BLOCKS = num_particle / THREAD_PER_BLOCK;
-const int MAX_ITER = 300;
+const int MAX_ITER = 3000;
 
 double h_initial[] = {5, 5};
 double *initial, *BOUNDS, *numbersRand;
@@ -69,15 +69,6 @@ __device__ double sphere(Particle *x)
     return total;
 }
 
-__global__ void gpuGenerateRand(double *numbers)
-{
-    int i = threadIdx.x + blockIdx.x * blockDim.x;
-    curandState_t state;
-    curand_init(0, 0, i, &state);
-    double number = curand_uniform(&state);
-    numbers[i] = number;
-}
-
 void initialize_gpu_memory(int num_swarms)
 {
     h_pos_best_g = (double *)malloc(sizeof(double) * num_dimensions);
@@ -87,39 +78,21 @@ void initialize_gpu_memory(int num_swarms)
 
     cudaMallocHost(&h_swarm, sizeof(Particle) * num_particle);
     cudaMallocHost(&h_swarms, sizeof(Swarm) * num_swarms);
-    cudaMalloc(&pos_best_g, sizeof(double) * num_dimensions);
-    cudaMalloc(&err_best_g, sizeof(double));
     cudaMalloc(&BOUNDS, sizeof(double) * num_dimensions * num_dimensions);
     cudaMalloc(&initial, sizeof(double) * num_dimensions);
     cudaMalloc(&numbersRand, sizeof(double) * num_dimensions * num_particle * num_swarms);
-
-    gpuGenerateRand<<<BLOCKS, THREAD_PER_BLOCK>>>(numbersRand);
-
-    for (int k = 0; k < num_swarms; k++)
-    {
-        double h_err_best_s = MaxValue;
-        HANDLE_ERROR(cudaMalloc(&h_swarms[k].swarm, sizeof(Particle) * num_particle));
-        HANDLE_ERROR(cudaMalloc(&h_swarms[k].pos_best_s, sizeof(double) * num_dimensions));
-        HANDLE_ERROR(cudaMalloc(&h_swarms[k].err_best_s, sizeof(double)));
-
-        for (int i = 0; i < num_particle; i++)
-        {
-            HANDLE_ERROR(cudaMalloc(&h_swarm[i].position_i, sizeof(double) * num_dimensions));
-            HANDLE_ERROR(cudaMalloc(&h_swarm[i].velocity_i, sizeof(double) * num_dimensions));
-            HANDLE_ERROR(cudaMalloc(&h_swarm[i].pos_best_i, sizeof(double) * num_dimensions));
-        }
-
-        HANDLE_ERROR(cudaMemcpyAsync(h_swarms[k].err_best_s, &h_err_best_s, sizeof(double), cudaMemcpyHostToDevice));
-        HANDLE_ERROR(cudaMemcpyAsync(h_swarms[k].pos_best_s, &h_pos_best_g, sizeof(double) * num_dimensions, cudaMemcpyHostToDevice));
-        HANDLE_ERROR(cudaMemcpyAsync(h_swarms[k].swarm, h_swarm, sizeof(Particle) * num_particle, cudaMemcpyHostToDevice));
-    }
     cudaMemcpyAsync(BOUNDS, h_BOUNDS, sizeof(double) * num_dimensions * num_dimensions, cudaMemcpyHostToDevice);
     cudaMemcpyAsync(initial, h_initial, sizeof(double) * num_dimensions, cudaMemcpyHostToDevice);
 }
 
-__global__ void init_particle(Particle *swarm, double *x0, double *numbers, int num_swarms)
+__global__ void init_particle(Particle *swarm, double *x0, double *numbers)
 {
     int i = threadIdx.x + blockIdx.x * blockDim.x;
+
+    curandState_t state;
+    curand_init(0, 0, i, &state);
+    double number = curand_uniform(&state);
+    numbers[i] = number;
 
     for (int j = 0; j < num_dimensions; j++)
     {
@@ -190,14 +163,36 @@ void pso_execute_stream(int num_swarms, int repeat)
         cudaStream_t *stream = (cudaStream_t *)malloc(sizeof(cudaStream_t) * num_swarms);
         double h_pos_best_s[2];
         double h_err_best_s;
-        int k = 0;
-        for (int i = 0.; i < num_swarms; i++)
+
+        for (int k = 0.; k < num_swarms; k++)
         {
-            init_particle<<<BLOCKS, THREAD_PER_BLOCK>>>(h_swarms[i].swarm, initial, numbersRand, num_swarms);
-            HANDLE_ERROR(cudaStreamCreate(&stream[i]));
+            HANDLE_ERROR(cudaStreamCreate(&stream[k]));
+            HANDLE_ERROR(cudaMalloc(&h_swarms[k].swarm, sizeof(Particle) * num_particle));
+            HANDLE_ERROR(cudaMalloc(&h_swarms[k].pos_best_s, sizeof(double) * num_dimensions));
+            HANDLE_ERROR(cudaMalloc(&h_swarms[k].err_best_s, sizeof(double)));
+
+            for (int i = 0; i < num_particle; i++)
+            {
+                HANDLE_ERROR(cudaMalloc(&h_swarm[i].position_i, sizeof(double) * num_dimensions));
+                HANDLE_ERROR(cudaMalloc(&h_swarm[i].velocity_i, sizeof(double) * num_dimensions));
+                HANDLE_ERROR(cudaMalloc(&h_swarm[i].pos_best_i, sizeof(double) * num_dimensions));
+            }
         }
 
-        cudaDeviceSynchronize();
+        for (int k = 0.; k < num_swarms; k++)
+        {
+            double h_err_best_s = MaxValue;
+            HANDLE_ERROR(cudaMemcpyAsync(h_swarms[k].err_best_s, &h_err_best_s, sizeof(double), cudaMemcpyHostToDevice, stream[k]));
+            HANDLE_ERROR(cudaMemcpyAsync(h_swarms[k].pos_best_s, &h_pos_best_g, sizeof(double) * num_dimensions, cudaMemcpyHostToDevice, stream[k]));
+            HANDLE_ERROR(cudaMemcpyAsync(h_swarms[k].swarm, h_swarm, sizeof(Particle) * num_particle, cudaMemcpyHostToDevice, stream[k]));
+        }
+
+        for (int k = 0.; k < num_swarms; k++)
+        {
+            init_particle<<<BLOCKS, THREAD_PER_BLOCK, 0, stream[k]>>>(h_swarms[k].swarm, initial, numbersRand);
+        }
+
+        int k = 0;
         while (k < MAX_ITER)
         {
             for (int i = 0.; i < num_swarms; i++)
@@ -246,7 +241,7 @@ int main()
 {
 
     cudaProfilerStart();
-    pso_execute_stream(16, 1);
+    pso_execute_stream(8, 1);
     cudaProfilerStop();
     return 0;
 }
